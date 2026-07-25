@@ -1,0 +1,66 @@
+getgenv().Config = {
+ ["Hide UI"] = false,
+ ["White Screen"] = false,
+ ["Black Screen"] = false,
+ ["Start Farm"] = true,
+
+ ["Exit When Full Item"] = true,
+
+ ["Settings"] = {
+ ["FPS Booster"] = true,
+ },
+
+ ["Auto Chat"] = {
+ ["Enabled"] = true,
+ ["Content"] = {"NaNa Hub Kaitun", "NaNa Hub", "NaNa Hub On Top"},
+ ["Time Chat"] = 300 
+ },
+
+ ["HOP"] = {
+ ["Enabled"] = true,
+ ["time hop"] = 3000 
+ },
+
+ ["Melee"] = {
+ ["All Melee V1"] = true,
+ ["Super Huamn"] = true,
+ ["Dragon Talon"] = true,
+ ["Sharkman Karate"] = true,
+ ["Elechic Claw"] = true,
+ ["GodHuman"] = true,
+ },
+
+ ["Sword"] = {
+ ["All Sword"] = true,
+ ["Saber"] = true,
+ ["Pole"] = true,
+ ["Rengoku"] = true,
+ ["Midnight Blade"] = true,
+ ["Soul Cane"] = true,
+ ["Gravity Cane"] = true,
+ ["Dragon Trident"] = true,
+ ["Legendary Sword"] = true,
+ ["True Triple Katana"] = true,
+ ["Twin Hooks"] = true,
+ ["Canvander"] = true,
+ ["Buddy Sword"] = true,
+ ["Hallow Scythe"] = true,
+ ["Yama"] = true,
+ ["Tushita"] = true,
+ ["Cursed Dual Katana"] = true,
+ },
+
+ ["Gun"] = {
+ ["All Gun"] = true,
+ ["Acidum Rifle"] = true,
+ ["Kabucha"] = true,
+ ["Serpent Bow"] = true,
+ ["Skull Guitar"] = true,
+ },
+
+ ["Race"] = {
+ ["Auto V2"] = true,
+ ["Auto V3"] = true,
+ },
+}
+loadstring(game:HttpGet("https://raw.githubusercontent.com/tamdznanatv/kaitunscript/refs/heads/main/NaNakaitun.lua"))()
