@@ -1,0 +1,852 @@
+--[[
+    Blox Fruits Combat Enhancement Script
+    Модульная архитектура для стабильной работы без задержек
+    Автоматическое управление памятью и предотвращение утечек
+]]
+
+-- Инициализация окружения
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local LocalPlayer = Players.LocalPlayer
+
+-- Предотвращение множественного запуска
+if getgenv().CombatEnhancement_Loaded then
+    return
+end
+getgenv().CombatEnhancement_Loaded = true
+
+--[[ ==================== МОДУЛЬ КОНФИГУРАЦИИ ==================== ]]
+local ConfigModule = {}
+ConfigModule.__index = ConfigModule
+
+function ConfigModule.new()
+    local self = setmetatable({}, ConfigModule)
+    self.FileName = "CombatEnhancement_Config.json"
+    self.Defaults = {
+        FastAttack = false,
+        LongRangeMelee = false,
+        LongRangeSword = false,
+        LongRangeFruit = false,
+        HitboxExpand = false,
+        AutoTarget = false,
+        Prediction = false,
+        AttackSpeed = 15,
+        AttackRange = 250,
+        HitboxSize = 150
+    }
+    self.Data = self:Load()
+    return self
+end
+
+function ConfigModule:Load()
+    local success, data = pcall(function()
+        if isfile and isfile(self.FileName) then
+            local raw = readfile(self.FileName)
+            return HttpService:JSONDecode(raw)
+        end
+    end)
+    if success and data then
+        for k, v in pairs(self.Defaults) do
+            if data[k] == nil then
+                data[k] = v
+            end
+        end
+        return data
+    end
+    return table.clone(self.Defaults)
+end
+
+function ConfigModule:Save()
+    if writefile then
+        local json = HttpService:JSONEncode(self.Data)
+        writefile(self.FileName, json)
+    end
+end
+
+function ConfigModule:Get(key)
+    return self.Data[key]
+end
+
+function ConfigModule:Set(key, value)
+    self.Data[key] = value
+    self:Save()
+end
+
+--[[ ==================== МОДУЛЬ ОПТИМИЗАЦИИ ==================== ]]
+local Optimizer = {}
+Optimizer.__index = Optimizer
+
+function Optimizer.new()
+    local self = setmetatable({}, Optimizer)
+    self.Connections = {}
+    self.ActiveLoops = {}
+    self.DebounceTable = {}
+    self.LastRemoteFire = 0
+    self.MinRemoteInterval = 0.02 -- Минимальный интервал между вызовами Remote
+    return self
+end
+
+-- Предотвращение спама Remote событий
+function Optimizer:FireRemote(remote, ...)
+    local currentTime = tick()
+    if currentTime - self.LastRemoteFire >= self.MinRemoteInterval then
+        self.LastRemoteFire = currentTime
+        if remote and remote.FireServer then
+            pcall(function()
+                remote:FireServer(...)
+            end)
+        end
+    end
+end
+
+-- Создание безопасного цикла с автоочисткой
+function Optimizer:CreateLoop(name, func)
+    self:RemoveLoop(name)
+    local connection
+    connection = RunService.Heartbeat:Connect(function(deltaTime)
+        pcall(func, deltaTime)
+    end)
+    self.ActiveLoops[name] = connection
+    return connection
+end
+
+-- Удаление цикла
+function Optimizer:RemoveLoop(name)
+    if self.ActiveLoops[name] then
+        self.ActiveLoops[name]:Disconnect()
+        self.ActiveLoops[name] = nil
+    end
+end
+
+-- Добавление соединения в список для очистки
+function Optimizer:AddConnection(connection)
+    table.insert(self.Connections, connection)
+    return connection
+end
+
+-- Полная очистка всех соединений
+function Optimizer:Cleanup()
+    for name, loop in pairs(self.ActiveLoops) do
+        loop:Disconnect()
+    end
+    self.ActiveLoops = {}
+    for _, conn in ipairs(self.Connections) do
+        conn:Disconnect()
+    end
+    self.Connections = {}
+end
+
+-- Дебаунс функция для предотвращения множественных вызовов
+function Optimizer:Debounce(key, func, delay)
+    if not self.DebounceTable[key] then
+        self.DebounceTable[key] = tick()
+        func()
+        task.delay(delay or 0.1, function()
+            self.DebounceTable[key] = nil
+        end)
+    end
+end
+
+--[[ ==================== МОДУЛЬ ЦЕЛЕВОЙ СИСТЕМЫ ==================== ]]
+local TargetSystem = {}
+TargetSystem.__index = TargetSystem
+
+function TargetSystem.new(config, optimizer)
+    local self = setmetatable({}, TargetSystem)
+    self.Config = config
+    self.Optimizer = optimizer
+    self.CurrentTarget = nil
+    self.LastTargetUpdate = 0
+    self.TargetUpdateInterval = 0.05 -- Интервал обновления цели
+    return self
+end
+
+-- Проверка валидности цели
+function TargetSystem:IsValidTarget(target)
+    if not target then return false end
+    local character = target.Character
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    return true
+end
+
+-- Получение расстояния до цели
+function TargetSystem:GetDistance(target)
+    if not target or not target.Character then return 9999 end
+    local character = target.Character
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return 9999 end
+    local localChar = LocalPlayer.Character
+    if not localChar then return 9999 end
+    local localHRP = localChar:FindFirstChild("HumanoidRootPart")
+    if not localHRP then return 9999 end
+    return (hrp.Position - localHRP.Position).Magnitude
+end
+
+-- Поиск ближайшей цели
+function TargetSystem:FindNearestTarget(range)
+    local currentTime = tick()
+    if currentTime - self.LastTargetUpdate < self.TargetUpdateInterval then
+        return self.CurrentTarget
+    end
+    self.LastTargetUpdate = currentTime
+    
+    local nearestTarget = nil
+    local nearestDistance = range or self.Config:Get("AttackRange")
+    
+    -- Проверка игроков
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer then
+            local distance = self:GetDistance(player)
+            if distance <= nearestDistance and self:IsValidTarget(player) then
+                nearestDistance = distance
+                nearestTarget = player
+            end
+        end
+    end
+    
+    -- Проверка NPC
+    local workspace = game:GetService("Workspace")
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+            local humanoid = obj.Humanoid
+            if humanoid.Health > 0 and obj ~= LocalPlayer.Character then
+                local hrp = obj.HumanoidRootPart
+                local localChar = LocalPlayer.Character
+                if localChar and localChar:FindFirstChild("HumanoidRootPart") then
+                    local distance = (hrp.Position - localChar.HumanoidRootPart.Position).Magnitude
+                    if distance <= nearestDistance then
+                        nearestDistance = distance
+                        nearestTarget = {Character = obj, Name = obj.Name}
+                    end
+                end
+            end
+        end
+    end
+    
+    self.CurrentTarget = nearestTarget
+    return nearestTarget
+end
+
+-- Получение HumanoidRootPart цели
+function TargetSystem:GetTargetHRP(target)
+    if not target then return nil end
+    local character = target.Character
+    if not character then return nil end
+    return character:FindFirstChild("HumanoidRootPart")
+end
+
+--[[ ==================== МОДУЛЬ ПРЕДСКАЗАНИЯ ==================== ]]
+local PredictionModule = {}
+PredictionModule.__index = PredictionModule
+
+function PredictionModule.new()
+    local self = setmetatable({}, PredictionModule)
+    self.VelocityCache = {}
+    self.LastPositionCache = {}
+    return self
+end
+
+-- Расчет предсказанной позиции
+function PredictionModule:PredictPosition(target)
+    if not target then return nil end
+    local character = target.Character
+    if not character then return nil end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+    
+    local targetName = target.Name or character.Name
+    local currentPos = hrp.Position
+    local currentVelocity = hrp.Velocity
+    
+    -- Сохранение данных для расчета ускорения
+    if self.LastPositionCache[targetName] then
+        local lastPos = self.LastPositionCache[targetName]
+        local predictedVelocity = (currentPos - lastPos) / 0.1 -- Дельта за 100мс
+        
+        -- Сглаживание скорости
+        if self.VelocityCache[targetName] then
+            self.VelocityCache[targetName] = self.VelocityCache[targetName]:Lerp(predictedVelocity, 0.3)
+        else
+            self.VelocityCache[targetName] = predictedVelocity
+        end
+    end
+    
+    self.LastPositionCache[targetName] = currentPos
+    
+    -- Предсказание на основе скорости и пинга
+    local ping = game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+    local predictionTime = 0.15 + ping -- 150мс + пинг
+    local velocity = self.VelocityCache[targetName] or Vector3.zero
+    local predictedPos = currentPos + (velocity * predictionTime)
+    
+    return predictedPos
+end
+
+-- Очистка кэша для мертвых целей
+function PredictionModule:CleanupCache()
+    for name, _ in pairs(self.VelocityCache) do
+        local found = false
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player.Name == name and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+                found = true
+                break
+            end
+        end
+        if not found then
+            self.VelocityCache[name] = nil
+            self.LastPositionCache[name] = nil
+        end
+    end
+end
+
+--[[ ==================== МОДУЛЬ БЫСТРОЙ АТАКИ ==================== ]]
+local FastAttackModule = {}
+FastAttackModule.__index = FastAttackModule
+
+function FastAttackModule.new(config, optimizer, targetSystem, prediction)
+    local self = setmetatable({}, FastAttackModule)
+    self.Config = config
+    self.Optimizer = optimizer
+    self.TargetSystem = targetSystem
+    self.Prediction = prediction
+    self.IsActive = false
+    self.AttackLoop = nil
+    self.LastAttack = 0
+    return self
+end
+
+-- Запуск быстрой атаки
+function FastAttackModule:Start()
+    if self.IsActive then return end
+    self.IsActive = true
+    
+    self.AttackLoop = self.Optimizer:CreateLoop("FastAttack", function(deltaTime)
+        if not self.Config:Get("FastAttack") then
+            self:Stop()
+            return
+        end
+        
+        local currentTime = tick()
+        local attackDelay = 1 / self.Config:Get("AttackSpeed")
+        
+        if currentTime - self.LastAttack >= attackDelay then
+            self.LastAttack = currentTime
+            
+            local localChar = LocalPlayer.Character
+            if not localChar then return end
+            
+            local tool = localChar:FindFirstChildOfClass("Tool")
+            if tool and tool:FindFirstChild("Remote") then
+                self.Optimizer:FireRemote(tool.Remote)
+            else
+                -- Активация атаки через VirtualInputManager для Melee
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, nil, 0)
+                task.wait(0.01)
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, nil, 0)
+            end
+        end
+    end)
+end
+
+-- Остановка быстрой атаки
+function FastAttackModule:Stop()
+    self.IsActive = false
+    self.Optimizer:RemoveLoop("FastAttack")
+end
+
+--[[ ==================== МОДУЛЬ ДАЛЬНЕГО БОЯ ==================== ]]
+local LongRangeModule = {}
+LongRangeModule.__index = LongRangeModule
+
+function LongRangeModule.new(config, optimizer, targetSystem, prediction)
+    local self = setmetatable({}, LongRangeModule)
+    self.Config = config
+    self.Optimizer = optimizer
+    self.TargetSystem = targetSystem
+    self.Prediction = prediction
+    self.OriginalPositions = {}
+    self.IsMeleeActive = false
+    self.IsSwordActive = false
+    self.IsFruitActive = false
+    self.RangeLoop = nil
+    return self
+end
+
+-- Получение позиции для атаки на расстоянии
+function LongRangeModule:GetAttackPosition(weaponType)
+    local target = self.TargetSystem:FindNearestTarget(self.Config:Get("AttackRange"))
+    if not target then return nil end
+    
+    local range = self.Config:Get("AttackRange")
+    local targetHRP = self.TargetSystem:GetTargetHRP(target)
+    if not targetHRP then return nil end
+    
+    local localChar = LocalPlayer.Character
+    if not localChar then return nil end
+    local localHRP = localChar:FindFirstChild("HumanoidRootPart")
+    if not localHRP then return nil end
+    
+    -- Использование предсказания если включено
+    local targetPos = targetHRP.Position
+    if self.Config:Get("Prediction") then
+        local predictedPos = self.Prediction:PredictPosition(target)
+        if predictedPos then
+            targetPos = predictedPos
+        end
+    end
+    
+    local direction = (localHRP.Position - targetPos).Unit
+    local attackPos = targetPos + (direction * 2) -- Позиция рядом с целью
+    
+    return attackPos
+end
+
+-- Телепортация для атаки (с сохранением оригинальной позиции)
+function LongRangeModule:TeleportToAttack(weaponType)
+    local localChar = LocalPlayer.Character
+    if not localChar then return end
+    local localHRP = localChar:FindFirstChild("HumanoidRootPart")
+    if not localHRP then return end
+    
+    -- Сохранение оригинальной позиции
+    if not self.OriginalPositions[weaponType] then
+        self.OriginalPositions[weaponType] = localHRP.CFrame
+    end
+    
+    local attackPos = self:GetAttackPosition(weaponType)
+    if attackPos then
+        localHRP.CFrame = CFrame.new(attackPos)
+    end
+end
+
+-- Возврат на оригинальную позицию
+function LongRangeModule:ReturnToOriginal(weaponType)
+    local localChar = LocalPlayer.Character
+    if not localChar then return end
+    local localHRP = localChar:FindFirstChild("HumanoidRootPart")
+    if not localHRP then return end
+    
+    if self.OriginalPositions[weaponType] then
+        localHRP.CFrame = self.OriginalPositions[weaponType]
+        self.OriginalPositions[weaponType] = nil
+    end
+end
+
+-- Запуск режима дальнего боя
+function LongRangeModule:Start(weaponType)
+    if weaponType == "Melee" and not self.IsMeleeActive then
+        self.IsMeleeActive = true
+    elseif weaponType == "Sword" and not self.IsSwordActive then
+        self.IsSwordActive = true
+    elseif weaponType == "Fruit" and not self.IsFruitActive then
+        self.IsFruitActive = true
+    end
+    
+    if not self.RangeLoop then
+        self.RangeLoop = self.Optimizer:CreateLoop("LongRange", function(deltaTime)
+            local active = false
+            
+            if self.Config:Get("LongRangeMelee") and self.IsMeleeActive then
+                self:TeleportToAttack("Melee")
+                task.wait(0.05)
+                self:ReturnToOriginal("Melee")
+                active = true
+            end
+            
+            if self.Config:Get("LongRangeSword") and self.IsSwordActive then
+                self:TeleportToAttack("Sword")
+                task.wait(0.05)
+                self:ReturnToOriginal("Sword")
+                active = true
+            end
+            
+            if self.Config:Get("LongRangeFruit") and self.IsFruitActive then
+                self:TeleportToAttack("Fruit")
+                task.wait(0.05)
+                self:ReturnToOriginal("Fruit")
+                active = true
+            end
+            
+            if not active then
+                self:StopAll()
+            end
+        end)
+    end
+end
+
+-- Остановка всех режимов дальнего боя
+function LongRangeModule:StopAll()
+    self.IsMeleeActive = false
+    self.IsSwordActive = false
+    self.IsFruitActive = false
+    self.Optimizer:RemoveLoop("LongRange")
+    self.RangeLoop = nil
+    self.OriginalPositions = {}
+end
+
+--[[ ==================== МОДУЛЬ HITBOX ==================== ]]
+local HitboxModule = {}
+HitboxModule.__index = HitboxModule
+
+function HitboxModule.new(config, optimizer, targetSystem)
+    local self = setmetatable({}, HitboxModule)
+    self.Config = config
+    self.Optimizer = optimizer
+    self.TargetSystem = targetSystem
+    self.ExpandedParts = {}
+    self.HitboxLoop = nil
+    self.IsActive = false
+    return self
+end
+
+-- Расширение хитбокса цели
+function HitboxModule:ExpandHitbox(target)
+    if not target then return end
+    local character = target.Character
+    if not character then return end
+    
+    local size = self.Config:Get("HitboxSize") / 100
+    local parts = {"Head", "HumanoidRootPart", "Left Arm", "Right Arm", "Left Leg", "Right Leg", "Torso", "UpperTorso", "LowerTorso"}
+    
+    for _, partName in ipairs(parts) do
+        local part = character:FindFirstChild(partName)
+        if part and part:IsA("BasePart") then
+            if not self.ExpandedParts[part] then
+                self.ExpandedParts[part] = part.Size
+            end
+            part.Size = Vector3.new(size, size, size)
+            part.Transparency = 0.5
+            part.CanCollide = false
+        end
+    end
+end
+
+-- Восстановление оригинального размера хитбокса
+function HitboxModule:RestoreHitbox(target)
+    if not target then return end
+    local character = target.Character
+    if not character then return end
+    
+    for part, originalSize in pairs(self.ExpandedParts) do
+        if part and part.Parent then
+            part.Size = originalSize
+            part.Transparency = 0
+            part.CanCollide = true
+        end
+    end
+    self.ExpandedParts = {}
+end
+
+-- Запуск системы хитбоксов
+function HitboxModule:Start()
+    if self.IsActive then return end
+    self.IsActive = true
+    
+    self.HitboxLoop = self.Optimizer:CreateLoop("Hitbox", function(deltaTime)
+        if not self.Config:Get("HitboxExpand") then
+            self:Stop()
+            return
+        end
+        
+        local target = self.TargetSystem:FindNearestTarget(self.Config:Get("AttackRange"))
+        if target then
+            self:ExpandHitbox(target)
+        end
+    end)
+end
+
+-- Остановка системы хитбоксов
+function HitboxModule:Stop()
+    self.IsActive = false
+    self.Optimizer:RemoveLoop("Hitbox")
+    self:RestoreHitbox(nil)
+end
+
+--[[ ==================== МОДУЛЬ АВТО-ЦЕЛИ ==================== ]]
+local AutoTargetModule = {}
+AutoTargetModule.__index = AutoTargetModule
+
+function AutoTargetModule.new(config, optimizer, targetSystem)
+    local self = setmetatable({}, AutoTargetModule)
+    self.Config = config
+    self.Optimizer = optimizer
+    self.TargetSystem = targetSystem
+    self.TargetLoop = nil
+    self.IsActive = false
+    return self
+end
+
+-- Автоматическое наведение на цель
+function AutoTargetModule:Start()
+    if self.IsActive then return end
+    self.IsActive = true
+    
+    self.TargetLoop = self.Optimizer:CreateLoop("AutoTarget", function(deltaTime)
+        if not self.Config:Get("AutoTarget") then
+            self:Stop()
+            return
+        end
+        
+        local target = self.TargetSystem:FindNearestTarget(self.Config:Get("AttackRange"))
+        if target then
+            local targetHRP = self.TargetSystem:GetTargetHRP(target)
+            if targetHRP then
+                local localChar = LocalPlayer.Character
+                if localChar and localChar:FindFirstChild("HumanoidRootPart") then
+                    local localHRP = localChar.HumanoidRootPart
+                    local lookAt = CFrame.new(localHRP.Position, targetHRP.Position)
+                    localHRP.CFrame = CFrame.new(localHRP.Position, targetHRP.Position)
+                end
+            end
+        end
+    end)
+end
+
+-- Остановка авто-цели
+function AutoTargetModule:Stop()
+    self.IsActive = false
+    self.Optimizer:RemoveLoop("AutoTarget")
+end
+
+--[[ ==================== ГЛАВНЫЙ КОНТРОЛЛЕР ==================== ]]
+local MainController = {}
+MainController.__index = MainController
+
+function MainController.new()
+    local self = setmetatable({}, MainController)
+    
+    -- Инициализация модулей
+    self.Config = ConfigModule.new()
+    self.Optimizer = Optimizer.new()
+    self.TargetSystem = TargetSystem.new(self.Config, self.Optimizer)
+    self.Prediction = PredictionModule.new()
+    self.FastAttack = FastAttackModule.new(self.Config, self.Optimizer, self.TargetSystem, self.Prediction)
+    self.LongRange = LongRangeModule.new(self.Config, self.Optimizer, self.TargetSystem, self.Prediction)
+    self.Hitbox = HitboxModule.new(self.Config, self.Optimizer, self.TargetSystem)
+    self.AutoTarget = AutoTargetModule.new(self.Config, self.Optimizer, self.TargetSystem)
+    
+    -- Создание GUI
+    self:CreateGUI()
+    
+    -- Подключение обработчиков изменения конфигурации
+    self:SetupConfigHandlers()
+    
+    -- Защита от утечек памяти
+    self:SetupMemoryProtection()
+    
+    return self
+end
+
+-- Создание графического интерфейса
+function MainController:CreateGUI()
+    local Window = Rayfield:CreateWindow({
+        Name = "Blox Fruits Combat Enhancement",
+        LoadingTitle = "Loading...",
+        LoadingSubtitle = "by Combat Systems",
+        ConfigurationSaving = {
+            Enabled = true,
+            FolderName = "CombatEnhancement",
+            FileName = "Settings"
+        }
+    })
+    
+    -- Вкладка боевых функций
+    local CombatTab = Window:CreateTab("Combat", "swords")
+    
+    local CombatSection = CombatTab:CreateSection("Attack Settings")
+    
+    -- Toggle: Быстрая атака
+    CombatTab:CreateToggle({
+        Name = "Fast Attack",
+        CurrentValue = self.Config:Get("FastAttack"),
+        Flag = "FastAttack",
+        Callback = function(value)
+            self.Config:Set("FastAttack", value)
+            if value then
+                self.FastAttack:Start()
+            else
+                self.FastAttack:Stop()
+            end
+        end
+    })
+    
+    -- Slider: Скорость атаки
+    CombatTab:CreateSlider({
+        Name = "Attack Speed",
+        Range = {1, 30},
+        Increment = 1,
+        Suffix = "hits/s",
+        CurrentValue = self.Config:Get("AttackSpeed"),
+        Flag = "AttackSpeed",
+        Callback = function(value)
+            self.Config:Set("AttackSpeed", value)
+        end
+    })
+    
+    -- Вкладка дальнего боя
+    local RangeTab = Window:CreateTab("Range", "crosshair")
+    
+    local RangeSection = RangeTab:CreateSection("Long Range Settings")
+    
+    -- Toggle: Дальний бой Melee
+    RangeTab:CreateToggle({
+        Name = "Long Range Melee",
+        CurrentValue = self.Config:Get("LongRangeMelee"),
+        Flag = "LongRangeMelee",
+        Callback = function(value)
+            self.Config:Set("LongRangeMelee", value)
+            if value then
+                self.LongRange:Start("Melee")
+            else
+                self.LongRange:StopAll()
+            end
+        end
+    })
+    
+    -- Toggle: Дальний бой Sword
+    RangeTab:CreateToggle({
+        Name = "Long Range Sword",
+        CurrentValue = self.Config:Get("LongRangeSword"),
+        Flag = "LongRangeSword",
+        Callback = function(value)
+            self.Config:Set("LongRangeSword", value)
+            if value then
+                self.LongRange:Start("Sword")
+            else
+                self.LongRange:StopAll()
+            end
+        end
+    })
+    
+    -- Toggle: Дальний бой Fruit
+    RangeTab:CreateToggle({
+        Name = "Long Range Fruit",
+        CurrentValue = self.Config:Get("LongRangeFruit"),
+        Flag = "LongRangeFruit",
+        Callback = function(value)
+            self.Config:Set("LongRangeFruit", value)
+            if value then
+                self.LongRange:Start("Fruit")
+            else
+                self.LongRange:StopAll()
+            end
+        end
+    })
+    
+    -- Slider: Дальность атаки
+    RangeTab:CreateSlider({
+        Name = "Attack Range",
+        Range = {50, 300},
+        Increment = 10,
+        Suffix = "studs",
+        CurrentValue = self.Config:Get("AttackRange"),
+        Flag = "AttackRange",
+        Callback = function(value)
+            self.Config:Set("AttackRange", value)
+        end
+    })
+    
+    -- Вкладка вспомогательных функций
+    local MiscTab = Window:CreateTab("Misc", "settings")
+    
+    local MiscSection = MiscTab:CreateSection("Additional Settings")
+    
+    -- Toggle: Расширение хитбокса
+    MiscTab:CreateToggle({
+        Name = "Hitbox Expand",
+        CurrentValue = self.Config:Get("HitboxExpand"),
+        Flag = "HitboxExpand",
+        Callback = function(value)
+            self.Config:Set("HitboxExpand", value)
+            if value then
+                self.Hitbox:Start()
+            else
+                self.Hitbox:Stop()
+            end
+        end
+    })
+    
+    -- Slider: Размер хитбокса
+    MiscTab:CreateSlider({
+        Name = "Hitbox Size",
+        Range = {50, 200},
+        Increment = 10,
+        Suffix = "%",
+        CurrentValue = self.Config:Get("HitboxSize"),
+        Flag = "HitboxSize",
+        Callback = function(value)
+            self.Config:Set("HitboxSize", value)
+        end
+    })
+    
+    -- Toggle: Авто-цель
+    MiscTab:CreateToggle({
+        Name = "Auto Target",
+        CurrentValue = self.Config:Get("AutoTarget"),
+        Flag = "AutoTarget",
+        Callback = function(value)
+            self.Config:Set("AutoTarget", value)
+            if value then
+                self.AutoTarget:Start()
+            else
+                self.AutoTarget:Stop()
+            end
+        end
+    })
+    
+    -- Toggle: Предсказание
+    MiscTab:CreateToggle({
+        Name = "Prediction",
+        CurrentValue = self.Config:Get("Prediction"),
+        Flag = "Prediction",
+        Callback = function(value)
+            self.Config:Set("Prediction", value)
+        end
+    })
+end
+
+-- Настройка обработчиков изменения конфигурации
+function MainController:SetupConfigHandlers()
+    -- Периодическая очистка кэша предсказаний
+    self.Optimizer:AddConnection(RunService.Heartbeat:Connect(function()
+        if tick() % 5 < 0.1 then -- Каждые 5 секунд
+            self.Prediction:CleanupCache()
+        end
+    end))
+end
+
+-- Защита от утечек памяти
+function MainController:SetupMemoryProtection()
+    -- Очистка при выходе из игры
+    game:GetService("Players").LocalPlayer.OnCharacterRemoving:Connect(function()
+        self.Optimizer:Cleanup()
+    end)
+    
+    -- Автоматическая очистка неиспользуемых объектов
+    self.Optimizer:AddConnection(RunService.Stepped:Connect(function()
+        if #self.Optimizer.Connections > 100 then
+            local toRemove = {}
+            for i = 1, #self.Optimizer.Connections - 50 do
+                table.insert(toRemove, i)
+            end
+            for _, idx in ipairs(toRemove) do
+                if self.Optimizer.Connections[idx] then
+                    self.Optimizer.Connections[idx]:Disconnect()
+                    table.remove(self.Optimizer.Connections, idx)
+                end
+            end
+        end
+    end))
+end
+
+-- Точка входа
+local Controller = MainController.new()
