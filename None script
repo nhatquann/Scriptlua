@@ -1,0 +1,530 @@
+--[[
+    Скрипт: nhatquann hub
+    Версия: 1.0
+    Автор: palofsc
+    Описание: GUI с функциями бесконечного здоровья, полёта, ускорения,
+              кастомных кнопок и бесплатных геймпассов.
+--]]
+
+-- Инициализация окружения
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+-- Защита от повторного запуска
+if getgenv().NhatquannHubLoaded then return end
+getgenv().NhatquannHubLoaded = true
+
+-- Основные переменные
+local InfiniteHealthEnabled = false
+local FlyEnabled = false
+local SpeedEnabled = false
+local FlySpeed = 50
+local WalkSpeed = 50
+local CustomButtons = {}
+
+-- Создание главного GUI
+local MainGui = Instance.new("ScreenGui")
+MainGui.Name = "NhatquannHub"
+MainGui.Parent = game.CoreGui
+MainGui.ResetOnSpawn = false
+
+-- Главное окно
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 300, 0, 400)
+MainFrame.Position = UDim2.new(0.5, -150, 0.5, -200)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = MainGui
+
+-- Заголовок
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+Title.BorderSizePixel = 0
+Title.Text = "nhatquann hub"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.SourceSansBold
+Title.TextSize = 20
+Title.Parent = MainFrame
+
+-- Контейнер для кнопок
+local ButtonContainer = Instance.new("ScrollingFrame")
+ButtonContainer.Size = UDim2.new(1, -10, 1, -50)
+ButtonContainer.Position = UDim2.new(0, 5, 0, 45)
+ButtonContainer.BackgroundColor3 = Color3.fromRGB(30, 30, 30)
+ButtonContainer.BorderSizePixel = 0
+ButtonContainer.ScrollBarThickness = 4
+ButtonContainer.Parent = MainFrame
+
+local ButtonList = Instance.new("UIListLayout")
+ButtonList.Padding = UDim.new(0, 5)
+ButtonList.HorizontalAlignment = Enum.HorizontalAlignment.Center
+ButtonList.Parent = ButtonContainer
+
+-- Функция создания кнопки в главном меню
+local function createMainButton(name, callback)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -10, 0, 35)
+    btn.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.BorderSizePixel = 0
+    btn.Text = name
+    btn.Font = Enum.Font.SourceSans
+    btn.TextSize = 14
+    btn.Parent = ButtonContainer
+    btn.MouseButton1Click:Connect(callback)
+    return btn
+end
+
+-- ========== ФУНКЦИИ ОСНОВНЫХ ВОЗМОЖНОСТЕЙ ==========
+
+-- 1. Бесконечное здоровье
+local function toggleInfiniteHealth()
+    InfiniteHealthEnabled = not InfiniteHealthEnabled
+    if InfiniteHealthEnabled then
+        -- Зацикленное восстановление здоровья
+        spawn(function()
+            while InfiniteHealthEnabled do
+                pcall(function()
+                    local char = LocalPlayer.Character
+                    if char then
+                        local hum = char:FindFirstChild("Humanoid")
+                        if hum then
+                            hum.Health = hum.MaxHealth
+                        end
+                    end
+                end)
+                task.wait(0.1)
+            end
+        end)
+    end
+end
+
+-- 2. Полёт с отдельным GUI
+local FlyGui, FlySpeedSlider
+local function toggleFly()
+    FlyEnabled = not FlyEnabled
+    if FlyEnabled then
+        -- Создание GUI полёта
+        FlyGui = Instance.new("ScreenGui")
+        FlyGui.Name = "FlyControl"
+        FlyGui.Parent = game.CoreGui
+
+        local FlyFrame = Instance.new("Frame")
+        FlyFrame.Size = UDim2.new(0, 200, 0, 120)
+        FlyFrame.Position = UDim2.new(0, 20, 0, 200)
+        FlyFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        FlyFrame.BorderSizePixel = 0
+        FlyFrame.Active = true
+        FlyFrame.Draggable = true
+        FlyFrame.Parent = FlyGui
+
+        local FlyTitle = Instance.new("TextLabel")
+        FlyTitle.Size = UDim2.new(1, 0, 0, 30)
+        FlyTitle.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        FlyTitle.BorderSizePixel = 0
+        FlyTitle.Text = "Fly Control"
+        FlyTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+        FlyTitle.Font = Enum.Font.SourceSansBold
+        FlyTitle.TextSize = 16
+        FlyTitle.Parent = FlyFrame
+
+        -- Кнопка закрытия X
+        local CloseFly = Instance.new("TextButton")
+        CloseFly.Size = UDim2.new(0, 30, 0, 30)
+        CloseFly.Position = UDim2.new(1, -30, 0, 0)
+        CloseFly.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        CloseFly.BorderSizePixel = 0
+        CloseFly.Text = "X"
+        CloseFly.TextColor3 = Color3.fromRGB(255, 255, 255)
+        CloseFly.Font = Enum.Font.SourceSansBold
+        CloseFly.TextSize = 16
+        CloseFly.Parent = FlyFrame
+        CloseFly.MouseButton1Click:Connect(function()
+            FlyEnabled = false
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char and char:FindFirstChild("HumanoidRootPart") then
+                    -- Отключение физики полёта
+                    local root = char.HumanoidRootPart
+                    local bv = root:FindFirstChild("FlyVelocity")
+                    if bv then bv:Destroy() end
+                    local bg = root:FindFirstChild("FlyGyro")
+                    if bg then bg:Destroy() end
+                end
+            end)
+            FlyGui:Destroy()
+        end)
+
+        -- Слайдер скорости
+        FlySpeedSlider = Instance.new("TextBox")
+        FlySpeedSlider.Size = UDim2.new(1, -20, 0, 30)
+        FlySpeedSlider.Position = UDim2.new(0, 10, 0, 40)
+        FlySpeedSlider.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        FlySpeedSlider.TextColor3 = Color3.fromRGB(255, 255, 255)
+        FlySpeedSlider.BorderSizePixel = 0
+        FlySpeedSlider.PlaceholderText = "Speed: 50"
+        FlySpeedSlider.Text = "50"
+        FlySpeedSlider.Font = Enum.Font.SourceSans
+        FlySpeedSlider.TextSize = 14
+        FlySpeedSlider.Parent = FlyFrame
+
+        -- Кнопка применения скорости
+        local ApplyFlySpeed = Instance.new("TextButton")
+        ApplyFlySpeed.Size = UDim2.new(1, -20, 0, 25)
+        ApplyFlySpeed.Position = UDim2.new(0, 10, 0, 75)
+        ApplyFlySpeed.BackgroundColor3 = Color3.fromRGB(0, 170, 100)
+        ApplyFlySpeed.BorderSizePixel = 0
+        ApplyFlySpeed.Text = "Set Speed"
+        ApplyFlySpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ApplyFlySpeed.Font = Enum.Font.SourceSansBold
+        ApplyFlySpeed.TextSize = 14
+        ApplyFlySpeed.Parent = FlyFrame
+        ApplyFlySpeed.MouseButton1Click:Connect(function()
+            local newSpeed = tonumber(FlySpeedSlider.Text)
+            if newSpeed then
+                FlySpeed = newSpeed
+            end
+        end)
+
+        -- Запуск физики полёта
+        spawn(function()
+            while FlyEnabled do
+                pcall(function()
+                    local char = LocalPlayer.Character
+                    if char and char:FindFirstChild("HumanoidRootPart") then
+                        local root = char.HumanoidRootPart
+                        local hum = char:FindFirstChild("Humanoid")
+                        if hum then
+                            hum.PlatformStand = true
+                        end
+                        -- BodyVelocity для движения
+                        local bv = root:FindFirstChild("FlyVelocity") or Instance.new("BodyVelocity")
+                        bv.Name = "FlyVelocity"
+                        bv.Velocity = Vector3.new(0, 0, 0)
+                        bv.MaxForce = Vector3.new(1e6, 1e6, 1e6)
+                        bv.Parent = root
+                        -- BodyGyro для стабилизации
+                        local bg = root:FindFirstChild("FlyGyro") or Instance.new("BodyGyro")
+                        bg.Name = "FlyGyro"
+                        bg.MaxTorque = Vector3.new(1e6, 1e6, 1e6)
+                        bg.CFrame = root.CFrame
+                        bg.Parent = root
+                        -- Управление с клавиатуры
+                        local moveDir = Vector3.new(0, 0, 0)
+                        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += root.CFrame.LookVector end
+                        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= root.CFrame.LookVector end
+                        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= root.CFrame.RightVector end
+                        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += root.CFrame.RightVector end
+                        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+                        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= Vector3.new(0, 1, 0) end
+                        bv.Velocity = moveDir * FlySpeed
+                    end
+                end)
+                task.wait()
+            end
+        end)
+    else
+        -- Удаление GUI и физики при выключении
+        if FlyGui then FlyGui:Destroy() end
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local root = char:FindFirstChild("HumanoidRootPart")
+                if root then
+                    local bv = root:FindFirstChild("FlyVelocity")
+                    if bv then bv:Destroy() end
+                    local bg = root:FindFirstChild("FlyGyro")
+                    if bg then bg:Destroy() end
+                end
+                local hum = char:FindFirstChild("Humanoid")
+                if hum then hum.PlatformStand = false end
+            end
+        end)
+    end
+end
+
+-- 3. Ускорение ходьбы с отдельным GUI
+local SpeedGui, SpeedSlider
+local function toggleSpeed()
+    SpeedEnabled = not SpeedEnabled
+    if SpeedEnabled then
+        SpeedGui = Instance.new("ScreenGui")
+        SpeedGui.Name = "SpeedControl"
+        SpeedGui.Parent = game.CoreGui
+
+        local SpeedFrame = Instance.new("Frame")
+        SpeedFrame.Size = UDim2.new(0, 200, 0, 120)
+        SpeedFrame.Position = UDim2.new(0, 240, 0, 200)
+        SpeedFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+        SpeedFrame.BorderSizePixel = 0
+        SpeedFrame.Active = true
+        SpeedFrame.Draggable = true
+        SpeedFrame.Parent = SpeedGui
+
+        local SpeedTitle = Instance.new("TextLabel")
+        SpeedTitle.Size = UDim2.new(1, 0, 0, 30)
+        SpeedTitle.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+        SpeedTitle.BorderSizePixel = 0
+        SpeedTitle.Text = "Speed Control"
+        SpeedTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+        SpeedTitle.Font = Enum.Font.SourceSansBold
+        SpeedTitle.TextSize = 16
+        SpeedTitle.Parent = SpeedFrame
+
+        local CloseSpeed = Instance.new("TextButton")
+        CloseSpeed.Size = UDim2.new(0, 30, 0, 30)
+        CloseSpeed.Position = UDim2.new(1, -30, 0, 0)
+        CloseSpeed.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        CloseSpeed.BorderSizePixel = 0
+        CloseSpeed.Text = "X"
+        CloseSpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
+        CloseSpeed.Font = Enum.Font.SourceSansBold
+        CloseSpeed.TextSize = 16
+        CloseSpeed.Parent = SpeedFrame
+        CloseSpeed.MouseButton1Click:Connect(function()
+            SpeedEnabled = false
+            pcall(function()
+                local char = LocalPlayer.Character
+                if char then
+                    local hum = char:FindFirstChild("Humanoid")
+                    if hum then hum.WalkSpeed = 16 end
+                end
+            end)
+            SpeedGui:Destroy()
+        end)
+
+        SpeedSlider = Instance.new("TextBox")
+        SpeedSlider.Size = UDim2.new(1, -20, 0, 30)
+        SpeedSlider.Position = UDim2.new(0, 10, 0, 40)
+        SpeedSlider.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+        SpeedSlider.TextColor3 = Color3.fromRGB(255, 255, 255)
+        SpeedSlider.BorderSizePixel = 0
+        SpeedSlider.PlaceholderText = "Speed: 50"
+        SpeedSlider.Text = "50"
+        SpeedSlider.Font = Enum.Font.SourceSans
+        SpeedSlider.TextSize = 14
+        SpeedSlider.Parent = SpeedFrame
+
+        local ApplySpeed = Instance.new("TextButton")
+        ApplySpeed.Size = UDim2.new(1, -20, 0, 25)
+        ApplySpeed.Position = UDim2.new(0, 10, 0, 75)
+        ApplySpeed.BackgroundColor3 = Color3.fromRGB(0, 170, 100)
+        ApplySpeed.BorderSizePixel = 0
+        ApplySpeed.Text = "Set Speed"
+        ApplySpeed.TextColor3 = Color3.fromRGB(255, 255, 255)
+        ApplySpeed.Font = Enum.Font.SourceSansBold
+        ApplySpeed.TextSize = 14
+        ApplySpeed.Parent = SpeedFrame
+        ApplySpeed.MouseButton1Click:Connect(function()
+            local newSpeed = tonumber(SpeedSlider.Text)
+            if newSpeed then
+                WalkSpeed = newSpeed
+                pcall(function()
+                    local char = LocalPlayer.Character
+                    if char then
+                        local hum = char:FindFirstChild("Humanoid")
+                        if hum then hum.WalkSpeed = WalkSpeed end
+                    end
+                end)
+            end
+        end)
+
+        -- Применение скорости сразу при включении
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChild("Humanoid")
+                if hum then hum.WalkSpeed = WalkSpeed end
+            end
+        end)
+
+        -- Обновление скорости при изменении персонажа
+        local charAdded
+        charAdded = LocalPlayer.CharacterAdded:Connect(function(char)
+            if SpeedEnabled then
+                local hum = char:WaitForChild("Humanoid")
+                if hum then hum.WalkSpeed = WalkSpeed end
+            end
+        end)
+        SpeedGui.Destroying:Connect(function()
+            if charAdded then charAdded:Disconnect() end
+        end)
+    else
+        if SpeedGui then SpeedGui:Destroy() end
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                local hum = char:FindFirstChild("Humanoid")
+                if hum then hum.WalkSpeed = 16 end
+            end
+        end)
+    end
+end
+
+-- 4. Бесплатные геймпассы
+local function freeGamepass()
+    -- Стандартный метод попытки получения геймпассов через удалённые события
+    spawn(function()
+        local success = false
+        -- Сканируем ReplicatedStorage на наличие возможных покупок
+        for _, remote in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+            if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+                local name = remote.Name:lower()
+                if name:find("gamepass") or name:find("purchase") or name:find("buy") then
+                    pcall(function()
+                        remote:FireServer() -- или InvokeServer
+                        success = true
+                    end)
+                end
+            end
+        end
+        -- Альтернатива: установка владения через бэкдор (если есть)
+        if not success then
+            pcall(function()
+                local market = game:GetService("MarketplaceService")
+                -- Пробуем дать все геймпассы игры
+                for _, info in ipairs(market:GetDeveloperProductsAsync():GetCurrentPage()) do
+                    pcall(function()
+                        market:SignalGamepassPurchaseFinished(LocalPlayer, info.ProductId, true)
+                    end)
+                end
+            end)
+        end
+        -- Уведомление
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = "Gamepass",
+            Text = success and "Возможно, геймпасс активирован!" or "Метод не сработал",
+            Duration = 3
+        })
+    end)
+end
+
+-- 5. Кастомные кнопки
+local function createCustomButton(name, scriptStr)
+    local btn = createMainButton(name, function()
+        -- Выполнение пользовательского скрипта
+        local func, err = loadstring(scriptStr)
+        if func then
+            spawn(func)
+        else
+            warn("Ошибка скрипта: " .. err)
+        end
+    end)
+    table.insert(CustomButtons, {name = name, button = btn, script = scriptStr})
+end
+
+-- Окно добавления кастомной кнопки
+local function openAddButtonGUI()
+    local AddGui = Instance.new("ScreenGui")
+    AddGui.Name = "AddButton"
+    AddGui.Parent = game.CoreGui
+
+    local AddFrame = Instance.new("Frame")
+    AddFrame.Size = UDim2.new(0, 250, 0, 170)
+    AddFrame.Position = UDim2.new(0.5, -125, 0.5, -85)
+    AddFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+    AddFrame.BorderSizePixel = 0
+    AddFrame.Active = true
+    AddFrame.Draggable = true
+    AddFrame.Parent = AddGui
+
+    local AddTitle = Instance.new("TextLabel")
+    AddTitle.Size = UDim2.new(1, 0, 0, 30)
+    AddTitle.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
+    AddTitle.BorderSizePixel = 0
+    AddTitle.Text = "Add Custom Button"
+    AddTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    AddTitle.Font = Enum.Font.SourceSansBold
+    AddTitle.TextSize = 16
+    AddTitle.Parent = AddFrame
+
+    -- Поле имени
+    local NameInput = Instance.new("TextBox")
+    NameInput.Size = UDim2.new(1, -20, 0, 30)
+    NameInput.Position = UDim2.new(0, 10, 0, 40)
+    NameInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    NameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    NameInput.BorderSizePixel = 0
+    NameInput.PlaceholderText = "Button name"
+    NameInput.Font = Enum.Font.SourceSans
+    NameInput.TextSize = 14
+    NameInput.Parent = AddFrame
+
+    -- Поле скрипта
+    local ScriptInput = Instance.new("TextBox")
+    ScriptInput.Size = UDim2.new(1, -20, 0, 50)
+    ScriptInput.Position = UDim2.new(0, 10, 0, 75)
+    ScriptInput.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+    ScriptInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ScriptInput.BorderSizePixel = 0
+    ScriptInput.PlaceholderText = "Lua script"
+    ScriptInput.Font = Enum.Font.SourceSans
+    ScriptInput.TextSize = 12
+    ScriptInput.TextWrapped = true
+    ScriptInput.MultiLine = true
+    ScriptInput.Parent = AddFrame
+
+    -- Кнопка создания
+    local CreateBtn = Instance.new("TextButton")
+    CreateBtn.Size = UDim2.new(1, -20, 0, 30)
+    CreateBtn.Position = UDim2.new(0, 10, 0, 130)
+    CreateBtn.BackgroundColor3 = Color3.fromRGB(0, 170, 100)
+    CreateBtn.BorderSizePixel = 0
+    CreateBtn.Text = "Create"
+    CreateBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CreateBtn.Font = Enum.Font.SourceSansBold
+    CreateBtn.TextSize = 16
+    CreateBtn.Parent = AddFrame
+    CreateBtn.MouseButton1Click:Connect(function()
+        local name = NameInput.Text
+        local script = ScriptInput.Text
+        if name ~= "" and script ~= "" then
+            createCustomButton(name, script)
+            AddGui:Destroy()
+        end
+    end)
+end
+
+-- Добавление основных кнопок
+createMainButton("Infinite Health", toggleInfiniteHealth)
+createMainButton("Fly", toggleFly)
+createMainButton("Speed Boost", toggleSpeed)
+createMainButton("Free Gamepass", freeGamepass)
+
+-- Кнопка добавления кастомной кнопки
+createMainButton("+ Add Button", openAddButtonGUI)
+
+-- Уведомление о загрузке
+game:GetService("StarterGui"):SetCore("SendNotification", {
+    Title = "nhatquann hub",
+    Text = "Загружен! Используйте кнопки.",
+    Duration = 5
+})
+
+-- Обработчик смены персонажа для бесконечного здоровья
+LocalPlayer.CharacterAdded:Connect(function(char)
+    if InfiniteHealthEnabled then
+        spawn(function()
+            while InfiniteHealthEnabled do
+                pcall(function()
+                    if char then
+                        local hum = char:FindFirstChild("Humanoid")
+                        if hum then hum.Health = hum.MaxHealth end
+                    end
+                end)
+                task.wait(0.1)
+            end
+        end)
+    end
+    if SpeedEnabled then
+        local hum = char:WaitForChild("Humanoid")
+        if hum then hum.WalkSpeed = WalkSpeed end
+    end
+end)
